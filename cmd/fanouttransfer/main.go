@@ -64,31 +64,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	var receivers []string
+	var tasks []runner.Task
 	var err error
 	if *retryFailed != "" {
-		receivers, err = runner.LoadFailedDIDs(*retryFailed)
+		tasks, err = runner.LoadFailedTasks(*retryFailed)
 		if err != nil {
 			log.Fatalf("cannot read retry CSV: %v", err)
 		}
-		log.Printf("Retry mode: loaded %d failed receivers from %s", len(receivers), *retryFailed)
+		log.Printf("Retry mode: loaded %d failed transfers from %s", len(tasks), *retryFailed)
 	} else {
 		all, err := runner.LoadDIDs(*receiversFile, *sender)
 		if err != nil {
 			log.Fatalf("cannot read receivers file: %v", err)
 		}
 		log.Printf("Loaded %d receivers from %s (deduped, excluding sender)", len(all), *receiversFile)
-		receivers = runner.PickSubset(all, *count, *selectMode, *seed)
+		receivers := runner.PickSubset(all, *count, *selectMode, *seed)
 		log.Printf("Picked %d receivers using select=%s", len(receivers), *selectMode)
+
+		tasks = make([]runner.Task, len(receivers))
+		for i, r := range receivers {
+			tasks[i] = runner.Task{Sender: *sender, Receiver: r, Amount: *amount}
+		}
 	}
 
-	if len(receivers) == 0 {
-		log.Fatalf("No receivers to process.")
+	if len(tasks) == 0 {
+		log.Fatalf("No transfers to process.")
 	}
 
 	c := rubix.NewClient(*addr, *port, *timeout)
 
-	needed := float64(len(receivers)) * (*amount)
+	needed := sumAmount(tasks)
 	if !*skipBalanceCheck {
 		bal, raw, err := c.GetRBTBalance(*sender)
 		switch {
@@ -105,26 +110,23 @@ func main() {
 			}
 		}
 	}
-	log.Printf("Planned: %d × %.4f RBT = %.4f RBT total", len(receivers), *amount, needed)
+	log.Printf("Planned: %d transfers, %.4f RBT total", len(tasks), needed)
 	log.Printf("Starting fan-out: sender=%.20s...  → %d receivers  concurrency=%d  node=%s:%d",
-		*sender, len(receivers), *concurrency, *addr, *port)
-
-	tasks := make([]runner.Task, len(receivers))
-	for i, r := range receivers {
-		tasks[i] = runner.Task{DID: r}
-	}
+		*sender, len(tasks), *concurrency, *addr, *port)
 
 	fn := func(t runner.Task) runner.Result {
-		res := c.Transfer(*sender, t.DID, *amount, *password, *memo)
+		res := c.Transfer(t.Sender, t.Receiver, t.Amount, *password, *memo)
 		status := "FAIL"
 		if res.Status {
 			status = "SUCCESS"
 		}
 		return runner.Result{
-			DID:     t.DID,
-			Status:  status,
-			ReqID:   res.ReqID,
-			Message: res.Message,
+			Sender:        t.Sender,
+			Receiver:      t.Receiver,
+			Amount:        t.Amount,
+			TransactionID: res.TransactionID,
+			Status:        status,
+			Message:       res.Message,
 		}
 	}
 
@@ -133,7 +135,7 @@ func main() {
 		BatchSize:   *batchSize,
 		OutputDir:   *outputDir,
 		LogPrefix:   "fanout_transfer",
-		CSVHeader:   []string{"receiver_did", "status", "req_id", "error"},
+		CSVHeader:   []string{"sender_did", "receiver_did", "amount", "transaction_id", "status", "error"},
 	})
 	if err != nil {
 		log.Fatalf("run failed: %v", err)
@@ -141,4 +143,12 @@ func main() {
 	if fails > 0 {
 		os.Exit(1)
 	}
+}
+
+func sumAmount(tasks []runner.Task) float64 {
+	var total float64
+	for _, t := range tasks {
+		total += t.Amount
+	}
+	return total
 }

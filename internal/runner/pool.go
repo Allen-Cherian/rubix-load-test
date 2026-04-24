@@ -6,26 +6,28 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// Task describes one transfer to execute. DID is the primary counterparty —
-// the sender in bulk (N→1), the receiver in fan-out (1→N). PeerDID is the
-// secondary counterparty, used by peer (N→N) runs; it is empty otherwise.
+// Task describes one transfer to execute.
 type Task struct {
-	DID     string
-	PeerDID string
+	Sender   string
+	Receiver string
+	Amount   float64
 }
 
-// Result is the outcome of one Task.
+// Result is the outcome of one Task. TransactionID is populated only on
+// SUCCESS (a non-empty transactionID returned by the signature response).
 type Result struct {
-	DID     string
-	PeerDID string // empty unless this is a peer run
-	Status  string // "SUCCESS" or "FAIL"
-	ReqID   string
-	Message string
+	Sender        string
+	Receiver      string
+	Amount        float64
+	TransactionID string
+	Status        string // "SUCCESS" or "FAIL"
+	Message       string
 }
 
 // TransferFn executes one task and returns its result.
@@ -97,9 +99,13 @@ func Run(tasks []Task, fn TransferFn, cfg Config) (int64, int64, int64, error) {
 	go func() {
 		defer close(writerDone)
 		for r := range resultCh {
-			row := []string{r.DID, r.Status, r.ReqID, r.Message}
-			if len(cfg.CSVHeader) == 5 {
-				row = []string{r.DID, r.PeerDID, r.Status, r.ReqID, r.Message}
+			row := []string{
+				r.Sender,
+				r.Receiver,
+				strconv.FormatFloat(r.Amount, 'f', -1, 64),
+				r.TransactionID,
+				r.Status,
+				r.Message,
 			}
 			mu.Lock()
 			_ = csvWriter.Write(row)
@@ -110,7 +116,8 @@ func Run(tasks []Task, fn TransferFn, cfg Config) (int64, int64, int64, error) {
 				atomic.AddInt64(&success, 1)
 			} else {
 				atomic.AddInt64(&fails, 1)
-				logBoth("FAIL  did=%.20s...  error=%s", r.DID, r.Message)
+				logBoth("FAIL  sender=%.20s... receiver=%.20s... error=%s",
+					r.Sender, r.Receiver, r.Message)
 			}
 			if n%int64(cfg.BatchSize) == 0 && total > 0 {
 				elapsed := time.Since(tStart).Seconds()

@@ -48,6 +48,12 @@ type SignRespData struct {
 	Signature string `json:"signature"` // base64 — empty when the node signs with the unlocked DID
 }
 
+// TransferSuccess is the Result payload returned by a successful signature
+// response: {"status":true,"message":"Transfer initiated successfully","result":{"transactionID":"..."}}
+type TransferSuccess struct {
+	TransactionID string `json:"transactionID"`
+}
+
 // Endpoint paths.
 const (
 	EndpointTransaction = "/rubix/v1/tx"

@@ -47,14 +47,17 @@ func (c *Client) GetRBTBalance(did string) (*RBTBalance, *BasicResponse, error) 
 }
 
 // TransferResult is the outcome of a single end-to-end transfer attempt.
+// A transfer is only considered successful when the signature-response step
+// returns status=true AND a non-empty transactionID in its result.
 type TransferResult struct {
-	ReqID   string
-	Status  bool
-	Message string
+	TransactionID string
+	Status        bool
+	Message       string
 }
 
-// Transfer performs the full two-step flow: POST /rubix/v1/tx, and if the node
-// returns a signature challenge, follows up with POST /rubix/v1/signature.
+// Transfer performs the full two-step flow: POST /rubix/v1/tx, then
+// POST /rubix/v1/signature. Success requires a transactionID in the final
+// response; anything else is treated as failure.
 func (c *Client) Transfer(initiator, owner string, amount float64, password, memo string) TransferResult {
 	req := &TransactionRequest{
 		Initiator: initiator,
@@ -71,13 +74,13 @@ func (c *Client) Transfer(initiator, owner string, amount float64, password, mem
 
 	br, err := c.InitiateTransfer(req)
 	if err != nil {
-		return TransferResult{Status: false, Message: err.Error()}
+		return TransferResult{Status: false, Message: "tx: " + err.Error()}
 	}
 	if !br.Status {
-		return TransferResult{Status: false, Message: br.Message}
+		return TransferResult{Status: false, Message: "tx: " + br.Message}
 	}
 	if br.Result == nil {
-		return TransferResult{Status: true, Message: br.Message}
+		return TransferResult{Status: false, Message: "tx: no signature challenge returned"}
 	}
 
 	// Signature challenge — result is a SignReqData.
@@ -96,10 +99,25 @@ func (c *Client) Transfer(initiator, owner string, amount float64, password, mem
 	}
 	br2, err := c.SignatureResponse(sresp)
 	if err != nil {
-		return TransferResult{ReqID: sr.ID, Status: false, Message: err.Error()}
+		return TransferResult{Status: false, Message: "sig: " + err.Error()}
 	}
 	if !br2.Status {
-		return TransferResult{ReqID: sr.ID, Status: false, Message: br2.Message}
+		return TransferResult{Status: false, Message: "sig: " + br2.Message}
 	}
-	return TransferResult{ReqID: sr.ID, Status: true, Message: fmt.Sprintf("%v", br2.Message)}
+	if br2.Result == nil {
+		return TransferResult{Status: false, Message: "sig: status=true but result is null"}
+	}
+
+	sb, err := json.Marshal(br2.Result)
+	if err != nil {
+		return TransferResult{Status: false, Message: "marshal sig result: " + err.Error()}
+	}
+	var ts TransferSuccess
+	if err := json.Unmarshal(sb, &ts); err != nil {
+		return TransferResult{Status: false, Message: "decode sig result: " + err.Error()}
+	}
+	if ts.TransactionID == "" {
+		return TransferResult{Status: false, Message: "sig: empty transactionID in result"}
+	}
+	return TransferResult{TransactionID: ts.TransactionID, Status: true, Message: br2.Message}
 }

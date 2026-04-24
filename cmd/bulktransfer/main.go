@@ -54,47 +54,49 @@ func main() {
 		os.Exit(1)
 	}
 
-	var senders []string
+	var tasks []runner.Task
 	var err error
 	if *retryFailed != "" {
-		senders, err = runner.LoadFailedDIDs(*retryFailed)
+		tasks, err = runner.LoadFailedTasks(*retryFailed)
 		if err != nil {
 			log.Fatalf("cannot read retry CSV: %v", err)
 		}
-		log.Printf("Retry mode: loaded %d failed senders from %s", len(senders), *retryFailed)
+		log.Printf("Retry mode: loaded %d failed transfers from %s", len(tasks), *retryFailed)
 	} else {
-		senders, err = runner.LoadDIDs(*sendersFile, *receiver)
+		senders, err := runner.LoadDIDs(*sendersFile, *receiver)
 		if err != nil {
 			log.Fatalf("cannot read senders file: %v", err)
 		}
 		log.Printf("Loaded %d senders from %s (deduped, excluding receiver)", len(senders), *sendersFile)
+
+		tasks = make([]runner.Task, len(senders))
+		for i, s := range senders {
+			tasks[i] = runner.Task{Sender: s, Receiver: *receiver, Amount: *amount}
+		}
 	}
 
-	if len(senders) == 0 {
-		log.Fatalf("No senders to process.")
+	if len(tasks) == 0 {
+		log.Fatalf("No transfers to process.")
 	}
 
 	c := rubix.NewClient(*addr, *port, *timeout)
 
 	log.Printf("Starting bulk transfer: %d senders → receiver=%.20s...  concurrency=%d  node=%s:%d",
-		len(senders), *receiver, *concurrency, *addr, *port)
-
-	tasks := make([]runner.Task, len(senders))
-	for i, s := range senders {
-		tasks[i] = runner.Task{DID: s}
-	}
+		len(tasks), *receiver, *concurrency, *addr, *port)
 
 	fn := func(t runner.Task) runner.Result {
-		res := c.Transfer(t.DID, *receiver, *amount, *password, *memo)
+		res := c.Transfer(t.Sender, t.Receiver, t.Amount, *password, *memo)
 		status := "FAIL"
 		if res.Status {
 			status = "SUCCESS"
 		}
 		return runner.Result{
-			DID:     t.DID,
-			Status:  status,
-			ReqID:   res.ReqID,
-			Message: res.Message,
+			Sender:        t.Sender,
+			Receiver:      t.Receiver,
+			Amount:        t.Amount,
+			TransactionID: res.TransactionID,
+			Status:        status,
+			Message:       res.Message,
 		}
 	}
 
@@ -103,7 +105,7 @@ func main() {
 		BatchSize:   *batchSize,
 		OutputDir:   *outputDir,
 		LogPrefix:   "bulk_transfer",
-		CSVHeader:   []string{"sender_did", "status", "req_id", "error"},
+		CSVHeader:   []string{"sender_did", "receiver_did", "amount", "transaction_id", "status", "error"},
 	})
 	if err != nil {
 		log.Fatalf("run failed: %v", err)

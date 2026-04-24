@@ -19,7 +19,6 @@
 package main
 
 import (
-	"encoding/csv"
 	"flag"
 	"fmt"
 	"log"
@@ -63,7 +62,7 @@ func main() {
 	var err error
 
 	if *retryFailed != "" {
-		tasks, err = loadFailedPairs(*retryFailed)
+		tasks, err = runner.LoadFailedTasks(*retryFailed)
 		if err != nil {
 			log.Fatalf("cannot read retry CSV: %v", err)
 		}
@@ -79,7 +78,7 @@ func main() {
 		}
 		log.Printf("Loaded %d senders, %d receivers (deduped)", len(senders), len(receivers))
 
-		tasks = buildPairs(senders, receivers, *count, *pairMode, *seed)
+		tasks = buildPairs(senders, receivers, *count, *pairMode, *seed, *amount)
 		log.Printf("Built %d pairs using pair=%s", len(tasks), *pairMode)
 	}
 
@@ -95,17 +94,18 @@ func main() {
 		len(tasks), *concurrency, *addr, *port)
 
 	fn := func(t runner.Task) runner.Result {
-		res := c.Transfer(t.DID, t.PeerDID, *amount, *password, *memo)
+		res := c.Transfer(t.Sender, t.Receiver, t.Amount, *password, *memo)
 		status := "FAIL"
 		if res.Status {
 			status = "SUCCESS"
 		}
 		return runner.Result{
-			DID:     t.DID,
-			PeerDID: t.PeerDID,
-			Status:  status,
-			ReqID:   res.ReqID,
-			Message: res.Message,
+			Sender:        t.Sender,
+			Receiver:      t.Receiver,
+			Amount:        t.Amount,
+			TransactionID: res.TransactionID,
+			Status:        status,
+			Message:       res.Message,
 		}
 	}
 
@@ -114,7 +114,7 @@ func main() {
 		BatchSize:   *batchSize,
 		OutputDir:   *outputDir,
 		LogPrefix:   "peer_transfer",
-		CSVHeader:   []string{"sender_did", "receiver_did", "status", "req_id", "error"},
+		CSVHeader:   []string{"sender_did", "receiver_did", "amount", "transaction_id", "status", "error"},
 	})
 	if err != nil {
 		log.Fatalf("run failed: %v", err)
@@ -128,7 +128,7 @@ func main() {
 // index-for-index after truncating both lists to the same length. random
 // shuffles receivers first, then zips — so each sender and each receiver
 // still appears at most once per run.
-func buildPairs(senders, receivers []string, count int, mode string, seed int64) []runner.Task {
+func buildPairs(senders, receivers []string, count int, mode string, seed int64, amount float64) []runner.Task {
 	n := len(senders)
 	if len(receivers) < n {
 		n = len(receivers)
@@ -156,32 +156,7 @@ func buildPairs(senders, receivers []string, count int, mode string, seed int64)
 
 	tasks := make([]runner.Task, n)
 	for i := 0; i < n; i++ {
-		tasks[i] = runner.Task{DID: snd[i], PeerDID: rcv[i]}
+		tasks[i] = runner.Task{Sender: snd[i], Receiver: rcv[i], Amount: amount}
 	}
 	return tasks
-}
-
-// loadFailedPairs reads a peer-transfer results CSV and returns only FAIL rows
-// as Tasks. Columns: sender_did, receiver_did, status, req_id, error.
-func loadFailedPairs(path string) ([]runner.Task, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	records, err := csv.NewReader(f).ReadAll()
-	if err != nil {
-		return nil, err
-	}
-	var tasks []runner.Task
-	for i, row := range records {
-		if i == 0 {
-			continue
-		}
-		if len(row) >= 3 && row[2] == "FAIL" {
-			tasks = append(tasks, runner.Task{DID: row[0], PeerDID: row[1]})
-		}
-	}
-	return tasks, nil
 }

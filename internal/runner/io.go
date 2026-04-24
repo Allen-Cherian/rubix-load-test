@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/csv"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -34,9 +35,10 @@ func LoadDIDs(path, exclude string) ([]string, error) {
 	return dids, scanner.Err()
 }
 
-// LoadFailedDIDs reads a results CSV written by this tool and returns the DID
-// column for rows whose status is FAIL. Column 0 is the DID, column 1 status.
-func LoadFailedDIDs(path string) ([]string, error) {
+// LoadFailedTasks reads a results CSV written by this tool and returns Tasks
+// for rows whose status is FAIL. Expected columns:
+// sender, receiver, amount, transaction_id, status, error.
+func LoadFailedTasks(path string) ([]Task, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -44,18 +46,25 @@ func LoadFailedDIDs(path string) ([]string, error) {
 	defer f.Close()
 
 	r := csv.NewReader(f)
+	r.FieldsPerRecord = -1 // tolerate ragged rows just in case
 	records, err := r.ReadAll()
 	if err != nil {
 		return nil, err
 	}
-	var dids []string
+	var tasks []Task
 	for i, row := range records {
-		if i == 0 {
+		if i == 0 || len(row) < 5 {
 			continue
 		}
-		if len(row) >= 2 && row[1] == "FAIL" {
-			dids = append(dids, row[0])
+		if row[4] != "FAIL" {
+			continue
 		}
+		amt, _ := strconv.ParseFloat(row[2], 64)
+		tasks = append(tasks, Task{
+			Sender:   row[0],
+			Receiver: row[1],
+			Amount:   amt,
+		})
 	}
-	return dids, nil
+	return tasks, nil
 }
