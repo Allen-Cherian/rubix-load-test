@@ -2,10 +2,12 @@ package runner
 
 import (
 	"encoding/csv"
+	"fmt"
 	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -43,8 +45,9 @@ type Config struct {
 }
 
 // Run executes the given tasks through fn with a bounded worker pool. It writes
-// a CSV and a log file named "<prefix>_<UTC-ts>.{csv,log}" inside cfg.OutputDir,
-// mirrors the log to stdout, and returns (successes, failures, total).
+// a CSV and a log file named "<prefix>_<YYYY-MM-DD>_run<N>.{csv,log}" inside
+// cfg.OutputDir (N is auto-incremented per-day per-prefix), mirrors the log to
+// stdout, and returns (successes, failures, total).
 func Run(tasks []Task, fn TransferFn, cfg Config) (int64, int64, int64, error) {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 50
@@ -56,9 +59,14 @@ func Run(tasks []Task, fn TransferFn, cfg Config) (int64, int64, int64, error) {
 		return 0, 0, 0, err
 	}
 
-	ts := time.Now().UTC().Format("20060102T150405Z")
-	logPath := filepath.Join(cfg.OutputDir, cfg.LogPrefix+"_"+ts+".log")
-	csvPath := filepath.Join(cfg.OutputDir, cfg.LogPrefix+"_"+ts+".csv")
+	date := time.Now().Format("2006-01-02")
+	run, err := nextRunNumber(cfg.OutputDir, cfg.LogPrefix, date)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	base := fmt.Sprintf("%s_%s_run%d", cfg.LogPrefix, date, run)
+	logPath := filepath.Join(cfg.OutputDir, base+".log")
+	csvPath := filepath.Join(cfg.OutputDir, base+".csv")
 
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -152,6 +160,38 @@ func Run(tasks []Task, fn TransferFn, cfg Config) (int64, int64, int64, error) {
 	logBoth("Results CSV : %s", csvPath)
 	logBoth("Log file    : %s", logPath)
 	return s, f, total, nil
+}
+
+// nextRunNumber scans outputDir for existing files matching
+// "<prefix>_<date>_run<N>.{csv,log}" and returns N+1 of the highest match.
+// Returns 1 when no prior runs exist for this prefix+date combination.
+func nextRunNumber(outputDir, prefix, date string) (int, error) {
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 1, nil
+		}
+		return 0, err
+	}
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix+"_"+date+"_run") + `(\d+)\.(?:csv|log)$`)
+	highest := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := re.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		if n > highest {
+			highest = n
+		}
+	}
+	return highest + 1, nil
 }
 
 // PickSubset returns up to count items from all using the given mode

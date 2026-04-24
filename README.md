@@ -97,9 +97,14 @@ No pre-flight balance check here — N senders would mean N extra GETs. Underfun
 
 ## Output
 
-Each run writes two files to `-output`:
+Each run writes two files to `-output`, named `<prefix>_<YYYY-MM-DD>_run<N>.{csv,log}`:
 
-- **`<prefix>_<UTC-ts>.csv`** — one row per attempt. All three commands share the same 6-column schema:
+- The date is local.
+- `<N>` auto-increments per prefix per date, so multiple same-day runs don't collide: `fanout_transfer_2026-04-24_run1.csv`, `..._run2.csv`, etc.
+- A new day resets the counter to `run1`.
+- Prefixes are independent — `fanout_transfer_..._run1` and `peer_transfer_..._run1` can coexist on the same day.
+
+**CSV** — one row per attempt. All three commands share the same 6-column schema:
 
   | Column | Meaning |
   |---|---|
@@ -118,7 +123,7 @@ Each run writes two files to `-output`:
   bafybmi...C,bafybmi...D,1,,FAIL,sig: password verification failed
   ```
 
-- **`<prefix>_<UTC-ts>.log`** — timestamped progress and failure log (also mirrored to stdout). Per-FAIL lines, progress ticks every `-batch-size` completions, final summary.
+**Log file** — same base name as the CSV, `.log` extension. Timestamped progress and failure log (also mirrored to stdout): per-FAIL lines, progress ticks every `-batch-size` completions, final summary.
 
 Rerun failures with `-retry-failed path/to/that.csv` — sender, receiver, and amount are all preserved from the original rows.
 
